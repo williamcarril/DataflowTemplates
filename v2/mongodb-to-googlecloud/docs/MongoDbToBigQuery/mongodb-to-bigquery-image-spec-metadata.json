@@ -3,38 +3,38 @@
   "description": "Reads records from MongoDb Collection and writes them to a BigQuery table",
   "parameters": [
     {
-      "name": "mongoDBUri",
+      "name": "mongoDbUri",
       "label": "MongoDB Connection URI",
       "helpText": "List of Mongo DB nodes separated by comma. ex: 192.285.234.12:27017,192.287.123.11:27017",
-      "is_optional": false,
+      "isOptional": false,
       "paramType": "TEXT"
     },
     {
       "name": "database",
       "label": "MongoDB database",
       "helpText": "Database in MongoDB to read the collection. ex: my-db.",
-      "is_optional": false,
+      "isOptional": false,
       "paramType": "TEXT"
     },
     {
       "name": "collection",
       "label": "MongoDB collection",
       "helpText": "Name of the collection in MongoDB database. ex: my-collection.",
-      "is_optional": false,
+      "isOptional": false,
       "paramType": "TEXT"
     },
     {
       "name": "outputTableSpec",
       "label": "BigQuery table spec to write the data",
       "helpText": "BigQuery destination table spec. e.g bigquery-project:dataset.output_table",
-      "is_optional": false,
+      "isOptional": false,
       "paramType": "TEXT"
     },
     {
       "name": "userOption",
       "label": "user option",
       "helpText": "Could be one of FLATTEN or NONE. FLATTEN will flatten the documents for 1 level. NONE will store the whole document as json string.",
-      "is_optional": false,
+      "isOptional": false,
       "paramType": "TEXT",
       "regexes": [
         "^(FLATTEN|NONE)$"
@@ -44,15 +44,29 @@
       "name":"javascriptDocumentTransformGcsPath",
       "label" : "JavaScript File Path",
       "helpText": "JS File Path",
-      "is_optional": "true",
+      "isOptional": true,
       "paramType": "TEXT"
     },
     {
       "name":"javascriptDocumentTransformFunctionName",
       "label":"UDF JavaScript Function Name",
       "helpText":"JS Function Name",
-      "paramType":"TEXT",
-      "isOptional":true
-    }
+      "isOptional": true,
+	  "paramType":"TEXT"
+    },
+	{
+	  "name":"aggregatePipelineFactoryGcpPath",
+	  "label" : "JavaScript Aggregate Factory File Path",
+	  "helpText": "JS File Path",
+	  "isOptional": false,
+	  "paramType": "TEXT"
+	},
+	{
+	  "name":"aggregatePipelineFactoryFunctionName",
+	  "label":"UDF JavaScript Aggregate Factory Function Name",
+	  "helpText":"JS Function Name",
+	  "isOptional":false,
+	  "paramType":"TEXT"
+	}
   ]
 }

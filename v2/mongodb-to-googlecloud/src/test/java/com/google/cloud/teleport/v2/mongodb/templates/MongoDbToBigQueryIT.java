@@ -130,6 +130,13 @@ public final class MongoDbToBigQueryIT extends TemplateTestBase {
             + "    outJson.udf = \"out\";\n"
             + "    return JSON.stringify(outJson);\n"
             + "}");
+    String aggregateFactory = "aggregate.js";
+    gcsClient.createArtifact(
+        "input/" + aggregateFactory,
+        "function factory() {\n"
+            + "    var stages = [{$match: {aggrfield: 'match'}}];\n"
+            + "    return JSON.stringify(stages);\n"
+            + "}");
     List<Field> bqSchemaFields = new ArrayList<>();
     bqSchemaFields.add(Field.of("timestamp", StandardSQLTypeName.TIMESTAMP));
     mongoDocuments
@@ -148,7 +155,10 @@ public final class MongoDbToBigQueryIT extends TemplateTestBase {
             .addParameter(BIGQUERY_TABLE, toTableSpecLegacy(table))
             .addParameter(USER_OPTION, "FLATTEN")
             .addParameter("javascriptDocumentTransformGcsPath", getGcsPath("input/" + udfFileName))
-            .addParameter("javascriptDocumentTransformFunctionName", "transform");
+            .addParameter("javascriptDocumentTransformFunctionName", "transform")
+            .addParameter(
+                "aggregatePipelineFactoryGcpPath", getGcsPath("input/" + aggregateFactory))
+            .addParameter("aggregatePipelineFactoryFunctionName", "factory");
 
     // Act
     LaunchInfo info = launchTemplate(options);
@@ -186,6 +196,7 @@ public final class MongoDbToBigQueryIT extends TemplateTestBase {
                       bigQueryJson.remove("timestamp");
                       String bigQueryId = bigQueryJson.getString(MONGO_DB_ID);
                       assertTrue(mongoMap.get(bigQueryId).similar(bigQueryJson));
+                      assertTrue(mongoMap.get(bigQueryId).get("aggrfield") == "match");
                     }));
   }
 
@@ -215,6 +226,7 @@ public final class MongoDbToBigQueryIT extends TemplateTestBase {
     }
     mongoDocumentKeys.add("udf");
     mongoDocumentKeys.add("nullonly");
+    mongoDocumentKeys.add("filterval");
 
     for (int i = 0; i < numDocuments; i++) {
       Document randomDocument = new Document().append(MONGO_DB_ID, new ObjectId());
@@ -225,6 +237,11 @@ public final class MongoDbToBigQueryIT extends TemplateTestBase {
       }
       randomDocument.append("udf", "in");
       randomDocument.append("nullonly", null);
+      String aggrVal = "match";
+      if (i % 2 == 0) {
+        aggrVal = "unmatch";
+      }
+      randomDocument.append("aggrfield", aggrVal);
 
       mongoDocuments.add(randomDocument);
     }

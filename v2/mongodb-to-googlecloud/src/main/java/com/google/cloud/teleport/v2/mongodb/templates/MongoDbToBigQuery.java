@@ -16,7 +16,9 @@
 package com.google.cloud.teleport.v2.mongodb.templates;
 
 import static com.google.cloud.teleport.v2.utils.KMSUtils.maybeDecrypt;
+import static org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Preconditions.checkArgument;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.cloud.teleport.metadata.Template;
@@ -24,21 +26,41 @@ import com.google.cloud.teleport.metadata.TemplateCategory;
 import com.google.cloud.teleport.v2.common.UncaughtExceptionLogger;
 import com.google.cloud.teleport.v2.mongodb.options.MongoDbToBigQueryOptions.BigQueryWriteOptions;
 import com.google.cloud.teleport.v2.mongodb.options.MongoDbToBigQueryOptions.JavascriptDocumentTransformerOptions;
+import com.google.cloud.teleport.v2.mongodb.options.MongoDbToBigQueryOptions.MongoDbAggregateOptions;
 import com.google.cloud.teleport.v2.mongodb.options.MongoDbToBigQueryOptions.MongoDbOptions;
 import com.google.cloud.teleport.v2.mongodb.templates.MongoDbToBigQuery.Options;
 import com.google.cloud.teleport.v2.options.BigQueryStorageApiBatchOptions;
 import com.google.cloud.teleport.v2.transforms.JavascriptDocumentTransformer.TransformDocumentViaJavascript;
 import com.google.cloud.teleport.v2.utils.BigQueryIOUtils;
 import java.io.IOException;
+import java.io.Reader;
+import java.io.UncheckedIOException;
+import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+import javax.script.Invocable;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineFactory;
+import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.FileSystems;
+import org.apache.beam.sdk.io.fs.MatchResult;
+import org.apache.beam.sdk.io.fs.MatchResult.Metadata;
+import org.apache.beam.sdk.io.fs.MatchResult.Status;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
+import org.apache.beam.sdk.io.mongodb.AggregationQuery;
 import org.apache.beam.sdk.io.mongodb.MongoDbIO;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.io.CharStreams;
+import org.bson.BsonDocument;
 import org.bson.Document;
+import org.openjdk.nashorn.api.scripting.ScriptObjectMirror;
 
 /**
  * The {@link MongoDbToBigQuery} pipeline is a batch pipeline which ingests data from MongoDB and
@@ -74,6 +96,7 @@ public class MongoDbToBigQuery {
   public interface Options
       extends PipelineOptions,
           MongoDbOptions,
+          MongoDbAggregateOptions,
           BigQueryWriteOptions,
           BigQueryStorageApiBatchOptions,
           JavascriptDocumentTransformerOptions {}
@@ -122,13 +145,19 @@ public class MongoDbToBigQuery {
               mongoDbUri, options.getDatabase(), options.getCollection(), options.getUserOption());
     }
 
+    AggregationQuery aggregatePipeline =
+        getAggregatePipeline(
+            options.getAggregatePipelineFactoryGcpPath(),
+            options.getAggregatePipelineFactoryFunctionName());
+
     pipeline
         .apply(
             "Read Documents",
             MongoDbIO.read()
                 .withUri(mongoDbUri)
                 .withDatabase(options.getDatabase())
-                .withCollection(options.getCollection()))
+                .withCollection(options.getCollection())
+                .withQueryFn(aggregatePipeline))
         .apply(
             "UDF",
             TransformDocumentViaJavascript.newBuilder()
@@ -156,5 +185,74 @@ public class MongoDbToBigQuery {
                 .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
     pipeline.run();
     return true;
+  }
+
+  private static AggregationQuery getAggregatePipeline(String path, String functionName)
+      throws IOException, ScriptException, NoSuchMethodException {
+    MatchResult fileMatch = FileSystems.match(path);
+    checkArgument(
+        fileMatch.status() == Status.OK && !fileMatch.metadata().isEmpty(),
+        "Failed to match any files with the pattern: " + path);
+
+    List<String> scripts =
+        fileMatch.metadata().stream()
+            .filter(metadata -> metadata.resourceId().getFilename().endsWith(".js"))
+            .map(Metadata::resourceId)
+            .map(
+                resourceId -> {
+                  try (Reader reader =
+                      Channels.newReader(
+                          FileSystems.open(resourceId), StandardCharsets.UTF_8.name())) {
+                    return CharStreams.toString(reader);
+                  } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                  }
+                })
+            .collect(Collectors.toList());
+
+    ScriptEngineManager manager = new ScriptEngineManager();
+    ScriptEngine engine = manager.getEngineByName("JavaScript");
+
+    if (engine == null) {
+      List<String> availableEngines = new ArrayList<>();
+      for (ScriptEngineFactory factory : manager.getEngineFactories()) {
+        availableEngines.add(factory.getEngineName() + " " + factory.getEngineVersion());
+      }
+      throw new RuntimeException(
+          String.format("JavaScript engine not available. Found engines: %s.", availableEngines));
+    }
+
+    for (String script : scripts) {
+      engine.eval(script);
+    }
+
+    Invocable invocable = (Invocable) engine;
+
+    Object rawResult;
+    synchronized (invocable) {
+      rawResult = invocable.invokeFunction(functionName);
+    }
+    if (rawResult == null
+        || ScriptObjectMirror.isUndefined(rawResult)
+        || !(rawResult instanceof String)) {
+      String className = "null";
+      if (!(rawResult == null || ScriptObjectMirror.isUndefined(rawResult))) {
+        className = rawResult.getClass().getName();
+      }
+      throw new RuntimeException(
+          "Aggregate pipeline UDF Function did not return a String. Instead got: " + className);
+    }
+
+    ObjectMapper mapper = new ObjectMapper();
+
+    Object[] result = mapper.readValue((String) rawResult, Object[].class);
+
+    List<BsonDocument> stages = new ArrayList<BsonDocument>();
+
+    for (Object e : result) {
+      stages.add(BsonDocument.parse(mapper.writeValueAsString(e)));
+    }
+
+    return AggregationQuery.create().withMongoDbPipeline(stages);
   }
 }

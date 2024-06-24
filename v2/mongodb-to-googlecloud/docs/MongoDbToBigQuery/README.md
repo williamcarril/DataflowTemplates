@@ -44,7 +44,8 @@ export MONGODB_DATABASE_NAME=<database name>
 export MONGODB_COLLECTION_NAME=<Collection name>
 export OUTPUT_TABLE_SPEC=<output tabel spec>
 export USER_OPTION = <user option>
-
+export AGGREGATE_PIPELINE_FACTORY_PATH=${BUCKET_NAME}/udf/factory/<factory.js>
+export AGGREGATE_PIPELINE_NAME=factory
 ```
 
 * Build and push image to Google Container Repository
@@ -118,7 +119,21 @@ mvn clean package -Dimage=${TARGET_GCR_IMAGE} \
         "helpText":"JS Function Name",
         "paramType":"TEXT",
         "isOptional":true
-      }
+      },
+		{
+			"name":"aggregatePipelineFactoryGcpPath",
+			"label" : "JavaScript Aggregate Factory File Path",
+			"helpText": "JS File Path",
+			"is_optional": false,
+			"paramType": "TEXT"
+		},
+		{
+			"name":"aggregatePipelineFactoryFunctionName",
+			"label":"UDF JavaScript Aggregate Factory Function Name",
+			"helpText":"JS Function Name",
+			"is_optional":false,
+			"paramType":"TEXT"
+		}
     ]
   },
   "sdk_info": {
