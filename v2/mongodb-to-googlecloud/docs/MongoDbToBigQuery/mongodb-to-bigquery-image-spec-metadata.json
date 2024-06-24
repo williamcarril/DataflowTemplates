@@ -53,6 +53,20 @@
       "helpText":"JS Function Name",
       "paramType":"TEXT",
       "isOptional":true
-    }
+    },
+	{
+		"name":"aggregatePipelineFactoryGcpPath",
+		"label" : "JavaScript Aggregate Factory File Path",
+		"helpText": "JS File Path",
+		"is_optional": false,
+		"paramType": "TEXT"
+	},
+	{
+		"name":"aggregatePipelineFactoryFunctionName",
+		"label":"UDF JavaScript Aggregate Factory Function Name",
+		"helpText":"JS Function Name",
+		"is_optional":false,
+		"paramType":"TEXT"
+	}
   ]
 }
