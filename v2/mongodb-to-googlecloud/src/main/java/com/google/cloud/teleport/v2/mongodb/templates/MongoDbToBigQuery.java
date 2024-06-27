@@ -56,11 +56,15 @@ import org.apache.beam.sdk.io.mongodb.MongoDbIO;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFn.ProcessContext;
+import org.apache.beam.sdk.transforms.DoFn.ProcessElement;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.io.CharStreams;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.openjdk.nashorn.api.scripting.ScriptObjectMirror;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The {@link MongoDbToBigQuery} pipeline is a batch pipeline which ingests data from MongoDB and
@@ -88,6 +92,8 @@ import org.openjdk.nashorn.api.scripting.ScriptObjectMirror;
       "The source MongoDB instance must be accessible from the Dataflow worker machines."
     })
 public class MongoDbToBigQuery {
+  private static final Logger LOGGER = LoggerFactory.getLogger(MongoDbToBigQuery.class);
+
   /**
    * Options supported by {@link MongoDbToBigQuery}
    *
@@ -121,6 +127,8 @@ public class MongoDbToBigQuery {
 
   public static boolean run(Options options)
       throws ScriptException, IOException, NoSuchMethodException {
+
+    LOGGER.debug("Initializing workflow");
     Pipeline pipeline = Pipeline.create(options);
     String userOption = options.getUserOption();
 
@@ -144,11 +152,14 @@ public class MongoDbToBigQuery {
           MongoDbUtils.getTableFieldSchema(
               mongoDbUri, options.getDatabase(), options.getCollection(), options.getUserOption());
     }
+    LOGGER.debug("Fetching MongoDB aggregate query");
 
     AggregationQuery aggregatePipeline =
         getAggregatePipeline(
             options.getAggregatePipelineFactoryGcpPath(),
             options.getAggregatePipelineFactoryFunctionName());
+
+    LOGGER.debug("MongoDB aggregate query found: " + aggregatePipeline.toString());
 
     pipeline
         .apply(
@@ -159,11 +170,31 @@ public class MongoDbToBigQuery {
                 .withCollection(options.getCollection())
                 .withQueryFn(aggregatePipeline))
         .apply(
+            ParDo.of(
+                new DoFn<Document, Document>() {
+                  @ProcessElement
+                  public void process(ProcessContext c) {
+                    Document document = c.element();
+                    LOGGER.debug("Document extracted: " + document.toJson());
+                    c.output(document);
+                  }
+                }))
+        .apply(
             "UDF",
             TransformDocumentViaJavascript.newBuilder()
                 .setFileSystemPath(options.getJavascriptDocumentTransformGcsPath())
                 .setFunctionName(options.getJavascriptDocumentTransformFunctionName())
                 .build())
+        .apply(
+            ParDo.of(
+                new DoFn<Document, Document>() {
+                  @ProcessElement
+                  public void process(ProcessContext c) {
+                    Document document = c.element();
+                    LOGGER.debug("Document transformed: " + document.toJson());
+                    c.output(document);
+                  }
+                }))
         .apply(
             "Transform to TableRow",
             ParDo.of(
@@ -173,6 +204,8 @@ public class MongoDbToBigQuery {
                   public void process(ProcessContext c) {
                     Document document = c.element();
                     TableRow row = MongoDbUtils.getTableSchema(document, userOption);
+
+                    LOGGER.debug("Table row to be loaded: " + row.toString());
                     c.output(row);
                   }
                 }))
