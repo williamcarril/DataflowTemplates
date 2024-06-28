@@ -19,8 +19,15 @@ import static com.google.cloud.teleport.v2.utils.KMSUtils.maybeDecrypt;
 import static org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Preconditions.checkArgument;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
+import com.google.cloud.bigquery.BigQuery;
+import com.google.cloud.bigquery.BigQueryOptions;
+import com.google.cloud.bigquery.Field;
+import com.google.cloud.bigquery.Schema;
+import com.google.cloud.bigquery.Table;
+import com.google.cloud.bigquery.TableId;
 import com.google.cloud.teleport.metadata.Template;
 import com.google.cloud.teleport.metadata.TemplateCategory;
 import com.google.cloud.teleport.v2.common.UncaughtExceptionLogger;
@@ -129,37 +136,42 @@ public class MongoDbToBigQuery {
       throws ScriptException, IOException, NoSuchMethodException {
 
     LOGGER.debug("Initializing workflow");
+    BigQuery bigquery = BigQueryOptions.getDefaultInstance().getService();
+
     Pipeline pipeline = Pipeline.create(options);
     String userOption = options.getUserOption();
-
-    TableSchema bigquerySchema;
 
     // Get MongoDbUri plain text or base64 encrypted with a specific KMS encryption key
     String mongoDbUri = maybeDecrypt(options.getMongoDbUri(), options.getKMSEncryptionKey()).get();
 
-    if (options.getJavascriptDocumentTransformFunctionName() != null
-        && options.getJavascriptDocumentTransformGcsPath() != null) {
-      bigquerySchema =
-          MongoDbUtils.getTableFieldSchemaForUDF(
-              mongoDbUri,
-              options.getDatabase(),
-              options.getCollection(),
-              options.getJavascriptDocumentTransformGcsPath(),
-              options.getJavascriptDocumentTransformFunctionName(),
-              options.getUserOption());
-    } else {
-      bigquerySchema =
-          MongoDbUtils.getTableFieldSchema(
-              mongoDbUri, options.getDatabase(), options.getCollection(), options.getUserOption());
+    String tableId = options.getOutputTableSpec();
+    String[] tableComponents = tableId.split("\\.");
+
+    String projectId = tableComponents[0];
+    String datasetName = tableComponents[1];
+    String tableName = tableComponents[2];
+
+    Table table = bigquery.getTable(TableId.of(projectId, datasetName, tableName));
+
+    Schema schema = table.getDefinition().getSchema();
+    List<TableFieldSchema> bigquerySchemaFields = new ArrayList<>();
+
+    for (Field field : schema.getFields()) {
+      LOGGER.debug("BigQuery schema field: " + field.getName() + "(" + field.getType().toString() + ")");
+      bigquerySchemaFields.add(
+          new TableFieldSchema().setName(field.getName()).setType(field.getType().toString()));
     }
-    LOGGER.debug("Fetching MongoDB aggregate query");
+
+    TableSchema bigquerySchema = new TableSchema().setFields(bigquerySchemaFields);
+
+    LOGGER.debug("BigQuery schema: " + bigquerySchema.toPrettyString());
 
     AggregationQuery aggregatePipeline =
         getAggregatePipeline(
             options.getAggregatePipelineFactoryGcpPath(),
             options.getAggregatePipelineFactoryFunctionName());
 
-    LOGGER.debug("MongoDB aggregate query found: " + aggregatePipeline.toString());
+    LOGGER.debug("MongoDB aggregate pipeline: " + aggregatePipeline.toString());
 
     pipeline
         .apply(
