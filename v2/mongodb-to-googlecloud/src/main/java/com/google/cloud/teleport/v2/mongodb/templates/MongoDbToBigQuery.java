@@ -63,8 +63,6 @@ import org.apache.beam.sdk.io.mongodb.MongoDbIO;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.DoFn.ProcessContext;
-import org.apache.beam.sdk.transforms.DoFn.ProcessElement;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.io.CharStreams;
 import org.bson.BsonDocument;
@@ -135,7 +133,7 @@ public class MongoDbToBigQuery {
   public static boolean run(Options options)
       throws ScriptException, IOException, NoSuchMethodException {
 
-    LOGGER.debug("Initializing workflow");
+    LOGGER.info("Initializing workflow");
     BigQuery bigquery = BigQueryOptions.getDefaultInstance().getService();
 
     Pipeline pipeline = Pipeline.create(options);
@@ -157,21 +155,20 @@ public class MongoDbToBigQuery {
     List<TableFieldSchema> bigquerySchemaFields = new ArrayList<>();
 
     for (Field field : schema.getFields()) {
-      LOGGER.debug("BigQuery schema field: " + field.getName() + "(" + field.getType().toString() + ")");
+      LOGGER.info(
+          "BigQuery schema field: " + field.getName() + "(" + field.getType().toString() + ")");
       bigquerySchemaFields.add(
           new TableFieldSchema().setName(field.getName()).setType(field.getType().toString()));
     }
 
     TableSchema bigquerySchema = new TableSchema().setFields(bigquerySchemaFields);
 
-    LOGGER.debug("BigQuery schema: " + bigquerySchema.toPrettyString());
-
     AggregationQuery aggregatePipeline =
         getAggregatePipeline(
             options.getAggregatePipelineFactoryGcpPath(),
             options.getAggregatePipelineFactoryFunctionName());
 
-    LOGGER.debug("MongoDB aggregate pipeline: " + aggregatePipeline.toString());
+    LOGGER.info("MongoDB aggregate pipeline: " + aggregatePipeline.toString());
 
     pipeline
         .apply(
@@ -182,31 +179,11 @@ public class MongoDbToBigQuery {
                 .withCollection(options.getCollection())
                 .withQueryFn(aggregatePipeline))
         .apply(
-            ParDo.of(
-                new DoFn<Document, Document>() {
-                  @ProcessElement
-                  public void process(ProcessContext c) {
-                    Document document = c.element();
-                    LOGGER.debug("Document extracted: " + document.toJson());
-                    c.output(document);
-                  }
-                }))
-        .apply(
             "UDF",
             TransformDocumentViaJavascript.newBuilder()
                 .setFileSystemPath(options.getJavascriptDocumentTransformGcsPath())
                 .setFunctionName(options.getJavascriptDocumentTransformFunctionName())
                 .build())
-        .apply(
-            ParDo.of(
-                new DoFn<Document, Document>() {
-                  @ProcessElement
-                  public void process(ProcessContext c) {
-                    Document document = c.element();
-                    LOGGER.debug("Document transformed: " + document.toJson());
-                    c.output(document);
-                  }
-                }))
         .apply(
             "Transform to TableRow",
             ParDo.of(
@@ -216,8 +193,6 @@ public class MongoDbToBigQuery {
                   public void process(ProcessContext c) {
                     Document document = c.element();
                     TableRow row = MongoDbUtils.getTableSchema(document, userOption);
-
-                    LOGGER.debug("Table row to be loaded: " + row.toString());
                     c.output(row);
                   }
                 }))
